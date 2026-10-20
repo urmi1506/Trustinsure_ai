@@ -1,0 +1,46 @@
+[
+{
+"question": "What is the Secure Benefit in Optima Secure?",
+"ground_truth": "Secure Benefit doubles the insurance cover from day 1, instantly and automatically, at no additional cost."
+},
+{
+"question": "What is the Plus Benefit and how does it change after 1 and 2 years?",
+"ground_truth": "Plus Benefit increases the base cover by 50% after 1 year and 100% after 2 years, irrespective of claims made."
+},
+{
+"question": "How does Optima Secure provide 4X coverage?",
+"ground_truth": "Optima Secure provides 4X coverage through the combination of the Base Sum Insured, Plus Benefit after 2 policy years, Secure Benefit, and Automatic Restore Benefit."
+},
+{
+"question": "What does Restore Benefit do after a claim?",
+"ground_truth": "Restore Benefit automatically restores up to 100% of the Base Sum Insured after a partial or total claim, at no additional cost."
+},
+{
+"question": "What expenses are covered under Protect Benefit?",
+"ground_truth": "Protect Benefit covers listed non-medical hospitalisation expenses or consumables such as gloves, masks, and nebulizer kits."
+},
+{
+"question": "How many days of pre- and post-hospitalisation are covered?",
+"ground_truth": "Optima Secure covers 60 days of pre-hospitalisation and 180 days of post-hospitalisation expenses."
+},
+{
+"question": "What is the maximum HealthReturns percentage under Activ Assure Diamond?",
+"ground_truth": "The maximum HealthReturns under Activ Assure Diamond is up to 30% of the premium."
+},
+{
+"question": "What is the waiting period for cataract under Activ Assure Diamond?",
+"ground_truth": "The waiting period for cataract under Activ Assure Diamond is 2 years."
+},
+{
+"question": "What is the daily cash benefit for shared accommodation?",
+"ground_truth": "The daily cash benefit for choosing shared accommodation is INR 800 per day, up to a maximum of INR 4,800, when hospitalisation exceeds 48 hours in a network hospital's shared accommodation."
+},
+{
+"question": "What is the exact premium for a 35-year-old in Pune under Optima Secure?",
+"ground_truth": "The exact premium for a 35-year-old in Pune cannot be determined from the provided document. It gives an example of INR 26,700 including tax for a 2-member Family Floater policy with ages 35 and 30 in Tier 1 locations. Pune is not listed among those Tier 1 locations, and the document states that the exact premium should be calculated separately."
+},
+{
+"question": "What is the exact premium for a 35-year-old in Pune under Optima Secure?",
+"ground_truth": "The exact premium for a 35-year-old in Pune cannot be determined from the provided document. It gives an example premium of INR 26,700 including tax for a 2-member Family Floater policy with ages 35 and 30 in a Tier 1 location. The document states that the exact premium should be calculated separately."
+}
+]

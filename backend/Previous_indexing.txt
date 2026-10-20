@@ -1,0 +1,442 @@
+import os
+import re
+import json
+from pathlib import Path
+
+import numpy as np
+import faiss
+
+from docling.document_converter import DocumentConverter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from sentence_transformers import SentenceTransformer
+
+
+# ==========================================
+# CONFIGURATION
+# ==========================================
+
+DATA_DIR = "src/data"
+RESULT_DIR = "result"
+
+MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+
+
+# ==========================================
+# CLEAN MARKDOWN
+# ==========================================
+
+def clean_markdown(text):
+    """Clean unwanted artifacts from extracted Markdown."""
+
+    # Remove image placeholders
+    text = text.replace("<!-- image -->", "")
+
+    # Remove excessive blank lines
+    text = re.sub(r"\n\s*\n\s*\n+", "\n\n", text)
+
+    # Remove common extraction artifacts
+    text = text.replace("Af  ter Af  ter", "After")
+    text = text.replace(".notdef", "")
+
+    return text.strip()
+
+
+# ==========================================
+# LOAD DOCUMENT
+# ==========================================
+
+def load_document(pdf_path):
+    """Load PDF and extract cleaned Markdown text."""
+
+    converter = DocumentConverter()
+
+    result = converter.convert(pdf_path)
+
+    document = result.document
+
+    print("\nDocument Loaded Successfully")
+
+    print("\nExtracted text:")
+
+    markdown_text = document.export_to_markdown()
+
+    cleaned_text = clean_markdown(markdown_text)
+
+    print(
+        f"\nDocument processed successfully: "
+        f"{Path(pdf_path).name}"
+    )
+
+    # Print preview only
+    print("\nPreview:")
+    print(cleaned_text[:3000])
+
+    return cleaned_text
+
+
+# ==========================================
+# FIND PDF FILES
+# ==========================================
+
+def get_pdf_files():
+    """Find all PDF files inside the data directory."""
+
+    data_path = Path(DATA_DIR)
+
+    if not data_path.exists():
+        raise FileNotFoundError(
+            f"Data directory does not exist: {DATA_DIR}"
+        )
+
+    pdf_files = list(data_path.glob("*.pdf"))
+
+    if not pdf_files:
+        raise FileNotFoundError(
+            f"No PDF files found in {DATA_DIR}"
+        )
+
+    print("\n==============================")
+    print("PDF FILES FOUND")
+    print("==============================")
+
+    for pdf in pdf_files:
+        print("-", pdf.name)
+
+    return pdf_files
+
+
+# ==========================================
+# CREATE CHUNKS
+# ==========================================
+
+def create_chunks(markdown_text, source_name):
+    """Split Markdown document into manageable chunks."""
+
+    # Split based on Markdown headings
+    sections = re.split(
+        r"(?=^#{1,3}\s+)",
+        markdown_text,
+        flags=re.MULTILINE
+    )
+
+    sections = [
+        section.strip()
+        for section in sections
+        if section.strip()
+    ]
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=150,
+        separators=[
+            "\n\n",
+            "\n",
+            ". ",
+            " ",
+            ""
+        ]
+    )
+
+    final_chunks = []
+
+    for section in sections:
+
+        # Split long sections
+        if len(section) <= 1000:
+
+            text_chunks = [section]
+
+        else:
+
+            text_chunks = splitter.split_text(section)
+
+        for chunk in text_chunks:
+
+            cleaned_chunk = chunk.strip()
+
+            # Skip extremely small chunks
+            if len(cleaned_chunk) < 100:
+                continue
+
+            final_chunks.append(
+                {
+                    "content": cleaned_chunk,
+                    "source": source_name
+                }
+            )
+
+    print(
+        f"Chunks created for "
+        f"{source_name}: {len(final_chunks)}"
+    )
+
+    return final_chunks
+
+
+# ==========================================
+# CREATE EMBEDDINGS
+# ==========================================
+
+def create_embeddings(chunks):
+    """Generate embeddings for document chunks."""
+
+    if not chunks:
+        raise ValueError(
+            "No chunks available for embedding."
+        )
+
+    print("\n==============================")
+    print("LOADING EMBEDDING MODEL")
+    print("==============================")
+
+    model = SentenceTransformer(MODEL_NAME)
+
+    texts = [
+        chunk["content"]
+        for chunk in chunks
+    ]
+
+    print("\nGenerating embeddings...")
+
+    embeddings = model.encode(
+        texts,
+        show_progress_bar=True,
+        convert_to_numpy=True
+    )
+
+    # Ensure FAISS-compatible datatype
+    embeddings = embeddings.astype(np.float32)
+
+    print("\n==============================")
+    print("EMBEDDINGS CREATED")
+    print("==============================")
+
+    print("Number of chunks:", len(chunks))
+    print("Embedding shape:", embeddings.shape)
+
+    if len(chunks) > 0:
+
+        print("\nFirst Chunk:")
+        print(chunks[0])
+
+        print("\nFirst Embedding Preview:")
+        print(embeddings[0][:10])
+
+    return embeddings
+
+
+# ==========================================
+# SAVE RESULTS
+# ==========================================
+
+def save_results(chunks, embeddings):
+    """Save chunks and embeddings inside the result folder."""
+
+    os.makedirs(
+        RESULT_DIR,
+        exist_ok=True
+    )
+
+    chunks_path = os.path.join(
+        RESULT_DIR,
+        "chunks.json"
+    )
+
+    embeddings_path = os.path.join(
+        RESULT_DIR,
+        "embeddings.npy"
+    )
+
+    # Save chunks as JSON
+    with open(
+        chunks_path,
+        "w",
+        encoding="utf-8"
+    ) as file:
+
+        json.dump(
+            chunks,
+            file,
+            ensure_ascii=False,
+            indent=2
+        )
+
+    # Save embeddings
+    np.save(
+        embeddings_path,
+        embeddings
+    )
+
+    print("\n==============================")
+    print("RESULTS SAVED SUCCESSFULLY")
+    print("==============================")
+
+    print("Chunks saved to:")
+    print(chunks_path)
+
+    print("\nEmbeddings saved to:")
+    print(embeddings_path)
+
+
+# ==========================================
+# CREATE FAISS VECTOR STORE
+# ==========================================
+
+def create_vector_store(embeddings):
+    """Create and save FAISS vector index."""
+
+    if embeddings is None or len(embeddings) == 0:
+
+        raise ValueError(
+            "Cannot create FAISS index from empty embeddings."
+        )
+
+    # Convert to float32 and create copy
+    embeddings = np.asarray(
+        embeddings,
+        dtype=np.float32
+    ).copy()
+
+    # Normalize embeddings
+    # Inner Product + normalized vectors
+    # = Cosine Similarity
+    faiss.normalize_L2(embeddings)
+
+    # Get vector dimension
+    dimension = embeddings.shape[1]
+
+    # Create FAISS index
+    index = faiss.IndexFlatIP(dimension)
+
+    # Add embeddings
+    index.add(embeddings)
+
+    # Ensure result directory exists
+    os.makedirs(
+        RESULT_DIR,
+        exist_ok=True
+    )
+
+    # FAISS index path
+    index_path = os.path.join(
+        RESULT_DIR,
+        "faiss_index.bin"
+    )
+
+    # Save FAISS index
+    faiss.write_index(
+        index,
+        index_path
+    )
+
+    print("\n==============================")
+    print("FAISS VECTOR DATABASE CREATED")
+    print("==============================")
+
+    print("Total vectors:", index.ntotal)
+    print("Vector dimension:", dimension)
+    print("FAISS index saved to:", index_path)
+
+    return index
+
+
+# ==========================================
+# MAIN PROGRAM
+# ==========================================
+
+if __name__ == "__main__":
+
+    print("\n========================================")
+    print("PDF RAG INGESTION PIPELINE STARTED")
+    print("========================================")
+
+    # --------------------------------------
+    # STEP 1: FIND PDF FILES
+    # --------------------------------------
+
+    pdf_files = get_pdf_files()
+
+    all_chunks = []
+
+    # --------------------------------------
+    # STEP 2: PROCESS EVERY PDF
+    # --------------------------------------
+
+    for pdf_path in pdf_files:
+
+        print("\n==============================")
+        print(f"PROCESSING: {pdf_path.name}")
+        print("==============================")
+
+        try:
+
+            # Extract text
+            markdown_text = load_document(
+                pdf_path
+            )
+
+            # Create chunks
+            document_chunks = create_chunks(
+                markdown_text,
+                pdf_path.name
+            )
+
+            # Add chunks to global collection
+            all_chunks.extend(
+                document_chunks
+            )
+
+        except Exception as error:
+
+            print(
+                f"\nERROR processing "
+                f"{pdf_path.name}"
+            )
+
+            print(error)
+
+    # --------------------------------------
+    # STEP 3: VALIDATE CHUNKS
+    # --------------------------------------
+
+    print("\n==============================")
+    print("TOTAL DOCUMENT CHUNKS")
+    print("==============================")
+
+    print(len(all_chunks))
+
+    if not all_chunks:
+
+        raise ValueError(
+            "No chunks were created. "
+            "Please check your PDF files."
+        )
+
+    # --------------------------------------
+    # STEP 4: CREATE EMBEDDINGS
+    # --------------------------------------
+
+    embeddings = create_embeddings(
+        all_chunks
+    )
+
+    # --------------------------------------
+    # STEP 5: SAVE CHUNKS + EMBEDDINGS
+    # --------------------------------------
+
+    save_results(
+        all_chunks,
+        embeddings
+    )
+
+    # --------------------------------------
+    # STEP 6: CREATE FAISS VECTOR DATABASE
+    # --------------------------------------
+
+    create_vector_store(
+        embeddings
+    )
+
+    print("\n========================================")
+    print("PDF RAG INGESTION PIPELINE COMPLETED")
+    print("========================================")

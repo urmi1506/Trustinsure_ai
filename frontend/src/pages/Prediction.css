@@ -1,0 +1,154 @@
+.prediction-page {
+  min-height: 100vh;
+  padding: 40px 20px;
+  background: #f5f7fb;
+}
+
+.prediction-container {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.prediction-header {
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.prediction-header h1 {
+  font-size: 32px;
+  margin-bottom: 10px;
+}
+
+.prediction-header p {
+  color: #666;
+  font-size: 16px;
+}
+
+.prediction-card {
+  background: white;
+  padding: 30px;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+}
+
+.prediction-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-group label {
+  font-weight: 600;
+}
+
+.form-group input,
+.form-group select {
+  padding: 11px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 15px;
+}
+
+.form-group input:focus,
+.form-group select:focus {
+  outline: none;
+  border-color: #2563eb;
+}
+
+.predict-button {
+  grid-column: 1 / -1;
+  padding: 13px;
+  border: none;
+  border-radius: 6px;
+  background: #2563eb;
+  color: white;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.predict-button:hover {
+  background: #1d4ed8;
+}
+
+.predict-button:disabled {
+  background: #93c5fd;
+  cursor: not-allowed;
+}
+
+.error-message {
+  margin-top: 20px;
+  padding: 12px;
+  border-radius: 6px;
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.result-card {
+  margin-top: 25px;
+  padding: 25px;
+  text-align: center;
+  border-radius: 10px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+}
+
+.result-card h2 {
+  margin-bottom: 12px;
+}
+
+.premium {
+  font-size: 28px;
+  font-weight: 700;
+  margin: 0;
+}
+
+@media (max-width: 700px) {
+  .prediction-form {
+    grid-template-columns: 1fr;
+  }
+
+  .predict-button {
+    grid-column: auto;
+  }
+
+  .prediction-card {
+    padding: 20px;
+  }
+}
+
+.result-card h3 {
+  margin-top: 25px;
+  margin-bottom: 15px;
+}
+
+.explanation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: left;
+}
+
+.explanation-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 12px;
+  background: white;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+}
+
+.explanation-item span:last-child {
+  font-weight: 600;
+}
+
+.prediction-section .prediction-page {
+  min-height: auto;
+  padding: 0;
+}

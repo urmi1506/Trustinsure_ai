@@ -1,0 +1,953 @@
+# ============================================================
+# IMPORT REQUIRED LIBRARIES
+# ============================================================
+
+import json
+# 'json' is used to read the chunks.json file.
+# Why:
+# Our document chunks are stored in JSON format, so we need
+# this library to convert the JSON data into Python objects.
+
+from pathlib import Path
+# Path provides a safer and cleaner way to work with file paths.
+# Why:
+# It works across operating systems such as Windows and Linux.
+
+import re
+# 're' means Regular Expressions.
+# Why:
+# We use it to split text into individual words for BM25 search.
+
+import faiss
+# FAISS = Facebook AI Similarity Search.
+# Why:
+# FAISS performs fast vector similarity searches.
+# We use it to find documents that are semantically similar
+# to the user's question.
+
+import numpy as np
+# NumPy provides arrays and numerical operations.
+# Why:
+# FAISS expects embeddings to be stored as NumPy arrays,
+# usually with dtype float32.
+
+from rank_bm25 import BM25Okapi
+# BM25Okapi implements the BM25 keyword-search algorithm.
+# Why:
+# FAISS finds semantic similarity, while BM25 finds exact
+# or keyword-based matches.
+# Using both gives us hybrid retrieval.
+
+from sentence_transformers import SentenceTransformer
+# SentenceTransformer converts text into numerical vectors
+# called embeddings.
+# Why:
+# We need embeddings so FAISS can compare the meaning of
+# the user's query with document chunks.
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+# Name of the embedding model from Sentence Transformers.
+# Why:
+# This model converts sentences/documents into embeddings.
+# all-MiniLM-L6-v2 produces 384-dimensional embeddings.
+
+
+# ============================================================
+# PROJECT PATHS
+# ============================================================
+
+BASE_DIR = Path(__file__).resolve().parents[2]
+# __file__ = path of the current Python file.
+#
+# Path(__file__) converts that path into a Path object.
+#
+# .resolve() converts it into an absolute path.
+#
+# .parents[2] moves two directory levels upward.
+#
+# Why:
+# We want to find the project root regardless of where the
+# Python script is executed from.
+
+
+INDEX_PATH = BASE_DIR / "result" / "faiss_index.bin"
+# Path to the saved FAISS index.
+#
+# Example:
+# project/
+# ├── result/
+# │   └── faiss_index.bin
+#
+# Why:
+# The FAISS index contains the document embeddings.
+
+
+CHUNKS_PATH = BASE_DIR / "result" / "chunks.json"
+# Path to the original document chunks.
+#
+# Why:
+# FAISS only gives us vector positions/IDs.
+# We need chunks.json to retrieve the actual text
+# corresponding to those vector positions.
+
+
+# ============================================================
+# RRF CONFIGURATION
+# ============================================================
+
+RRF_K = 60
+# Constant used by Reciprocal Rank Fusion (RRF).
+#
+# RRF formula:
+#
+#       1
+#   -----------
+#    K + rank
+#
+# Why:
+# RRF combines rankings from different retrieval systems.
+#
+# FAISS and BM25 produce scores on different scales, so instead
+# of directly adding their scores, we combine their ranks.
+#
+# 60 is a commonly used value for K.
+
+
+# ============================================================
+# LOAD EMBEDDING MODEL
+# ============================================================
+
+model = SentenceTransformer(MODEL_NAME)
+# Load the Sentence Transformer model into memory.
+#
+# Why:
+# We need the model to convert the user's query into an
+# embedding/vector before searching FAISS.
+#
+# This should be loaded only once, rather than every time
+# the user asks a question.
+
+
+# ============================================================
+# TOKENIZATION FUNCTION
+# ============================================================
+
+def tokenize(text):
+    # Define a function called tokenize.
+    #
+    # Why:
+    # BM25 doesn't work directly with raw text.
+    # It needs a list of tokens/words.
+
+    return re.findall(r"\b\w+\b", text.lower())
+    # text.lower()
+    # Converts all text to lowercase.
+    #
+    # Why:
+    # "Insurance", "insurance", and "INSURANCE" should normally
+    # be treated as the same word.
+    #
+    # re.findall(...)
+    # Finds all words matching the regular expression.
+    #
+    # r"\b\w+\b"
+    # \b = word boundary
+    # \w+ = one or more word characters
+    #
+    # Example:
+    #
+    # "What is Health Insurance?"
+    #
+    # becomes:
+    #
+    # ["what", "is", "health", "insurance"]
+
+
+# ============================================================
+# LOAD FAISS VECTOR STORE
+# ============================================================
+
+def load_vector_store():
+    # Define a function that loads the FAISS index and
+    # document chunks.
+
+    index = faiss.read_index(str(INDEX_PATH))
+    # Load the saved FAISS index from disk.
+    #
+    # str(INDEX_PATH)
+    # converts the Path object into a string because FAISS
+    # expects a file path.
+    #
+    # Why:
+    # We don't want to recreate embeddings every time.
+    # We load the already-created vector index.
+
+    with open(CHUNKS_PATH, "r", encoding="utf-8") as file:
+        # Open chunks.json in read mode.
+        #
+        # encoding="utf-8"
+        # ensures that characters from different languages
+        # are read correctly.
+
+        chunks = json.load(file)
+        # Convert JSON data into Python objects.
+        #
+        # Usually this will become a list of dictionaries.
+        #
+        # Example:
+        #
+        # [
+        #     {
+        #         "chunk_id": 0,
+        #         "content": "Health insurance..."
+        #     }
+        # ]
+
+    print("Vector store loaded successfully")
+    # Inform the user that loading was successful.
+
+    print("Total vectors:", index.ntotal)
+    # index.ntotal tells us how many vectors exist in FAISS.
+    #
+    # Why:
+    # Useful for checking whether the index contains the
+    # expected number of document chunks.
+
+    print("Total chunks:", len(chunks))
+    # Count the number of chunks loaded from chunks.json.
+    #
+    # Why:
+    # FAISS vector positions should correspond to these chunks.
+
+    if index.ntotal != len(chunks):
+        # Check whether the number of FAISS vectors matches
+        # the number of chunks.
+
+        raise ValueError(
+            f"FAISS index contains {index.ntotal} vectors, "
+            f"but chunks.json contains {len(chunks)} chunks."
+        )
+        # Stop execution if the numbers don't match.
+        #
+        # Why:
+        # If FAISS index 10 points to chunks.json item 10,
+        # but that item doesn't exist, retrieval can return
+        # incorrect data or crash.
+
+    return index, chunks
+    # Return both objects to the caller.
+
+
+# ============================================================
+# BUILD BM25 INDEX
+# ============================================================
+
+def build_bm25(chunks):
+    # Create a BM25 search index from the document chunks.
+
+    tokenized_corpus = [
+        tokenize(chunk["content"])
+        for chunk in chunks
+    ]
+    # Go through every document chunk.
+    #
+    # chunk["content"]
+    # gets the actual text.
+    #
+    # tokenize(...)
+    # converts that text into a list of words.
+    #
+    # Example:
+    #
+    # "Health insurance covers hospitalization"
+    #
+    # becomes:
+    #
+    # ["health", "insurance", "covers", "hospitalization"]
+    #
+    # BM25 needs the entire corpus in tokenized form.
+
+    bm25 = BM25Okapi(tokenized_corpus)
+    # Build the BM25 index.
+    #
+    # Why:
+    # This allows us to perform keyword-based searches quickly.
+
+    print("BM25 index built successfully")
+    # Tell the user that BM25 has been initialized.
+
+    return bm25
+    # Return the BM25 object so it can be used during retrieval.
+
+
+# ============================================================
+# HYBRID RETRIEVAL
+# ============================================================
+
+def retrieve(
+    query,
+    index,
+    chunks,
+    bm25,
+    top_k=5,
+    candidate_k=10
+):
+    # Define the main hybrid retrieval function.
+    #
+    # query:
+    #     User's question.
+    #
+    # index:
+    #     FAISS vector index.
+    #
+    # chunks:
+    #     Original document chunks.
+    #
+    # bm25:
+    #     BM25 keyword index.
+    #
+    # top_k:
+    #     Number of final results we want.
+    #
+    # candidate_k:
+    #     Number of candidates retrieved from each system
+    #     before RRF fusion.
+
+
+    # ========================================================
+    # STEP 1: SEMANTIC SEARCH USING FAISS
+    # ========================================================
+
+    query_embedding = model.encode(
+        [query],
+        convert_to_numpy=True,
+        normalize_embeddings=True
+    ).astype(np.float32)
+    # Convert the user's question into an embedding.
+    #
+    # [query]
+    # The model expects a list of sentences.
+    #
+    # convert_to_numpy=True
+    # Returns a NumPy array instead of a PyTorch tensor.
+    #
+    # normalize_embeddings=True
+    # Normalizes the vector to unit length.
+    #
+    # Why:
+    # When the FAISS index was built with normalized vectors,
+    # normalized query vectors allow cosine similarity to be
+    # calculated using inner product.
+    #
+    # .astype(np.float32)
+    # Converts the array to 32-bit floating point.
+    #
+    # Why:
+    # FAISS normally expects float32 vectors.
+
+
+    semantic_scores, semantic_indices = index.search(
+        query_embedding,
+        candidate_k
+    )
+    # Search FAISS for the candidate_k most similar vectors.
+    #
+    # semantic_scores:
+    #     Similarity score for each result.
+    #
+    # semantic_indices:
+    #     Position/index of each matching chunk.
+    #
+    # Example:
+    #
+    # semantic_indices =
+    # [[5, 10, 2, 8, 1]]
+    #
+    # This means chunks 5, 10, 2, 8 and 1 were the best
+    # semantic matches.
+
+
+    semantic_rank = {}
+    # Dictionary that will store:
+    #
+    # chunk_id -> semantic rank
+    #
+    # Example:
+    #
+    # {
+    #     5: 1,
+    #     10: 2,
+    #     2: 3
+    # }
+
+
+    semantic_score_map = {}
+    # Dictionary that stores:
+    #
+    # chunk_id -> FAISS similarity score
+    #
+    # We keep this so we can display the score later.
+
+
+    for rank, (idx, score) in enumerate(
+        zip(
+            semantic_indices[0],
+            semantic_scores[0]
+        ),
+        start=1
+    ):
+        # Loop through every FAISS result.
+        #
+        # zip(...)
+        # combines the chunk index and its score.
+        #
+        # enumerate(..., start=1)
+        # gives ranks starting from 1 instead of 0.
+
+        if idx == -1:
+            # FAISS uses -1 when there isn't a valid result.
+
+            continue
+            # Skip invalid results.
+
+        idx = int(idx)
+        # Convert NumPy integer into normal Python integer.
+
+        semantic_rank[idx] = rank
+        # Store the semantic rank.
+
+        semantic_score_map[idx] = float(score)
+        # Store the actual FAISS similarity score.
+
+
+    # ========================================================
+    # STEP 2: KEYWORD SEARCH USING BM25
+    # ========================================================
+
+    query_tokens = tokenize(query)
+    # Convert the user's query into tokens.
+    #
+    # Example:
+    #
+    # "Does health insurance cover dental?"
+    #
+    # becomes:
+    #
+    # ["does", "health", "insurance", "cover", "dental"]
+
+
+    bm25_scores = bm25.get_scores(query_tokens)
+    # Calculate a BM25 score for every document chunk.
+    #
+    # Higher score = stronger keyword match.
+
+
+    keyword_indices = np.argsort(
+        bm25_scores
+    )[::-1][:candidate_k]
+    # Sort all chunks by BM25 score.
+    #
+    # np.argsort(...)
+    # gives indices ordered from low to high.
+    #
+    # [::-1]
+    # reverses the order, giving high to low.
+    #
+    # [:candidate_k]
+    # keeps only the best candidate_k results.
+    #
+    # Example:
+    #
+    # If candidate_k = 10,
+    # we keep the top 10 BM25 matches.
+
+
+    keyword_rank = {}
+    # Dictionary storing:
+    #
+    # chunk_id -> BM25 rank
+
+
+    keyword_score_map = {}
+    # Dictionary storing:
+    #
+    # chunk_id -> BM25 score
+
+
+    for rank, idx in enumerate(
+        keyword_indices,
+        start=1
+    ):
+        # Loop through BM25 results and assign ranks.
+
+        idx = int(idx)
+        # Convert NumPy integer to Python integer.
+
+        keyword_rank[idx] = rank
+        # Save the BM25 rank.
+
+        keyword_score_map[idx] = float(
+            bm25_scores[idx]
+        )
+        # Save the original BM25 score.
+
+
+    # ========================================================
+    # STEP 3: CREATE COMBINED CANDIDATE SET
+    # ========================================================
+
+    candidate_ids = (
+        set(semantic_rank.keys())
+        | set(keyword_rank.keys())
+    )
+    # Combine results from FAISS and BM25.
+    #
+    # set(...)
+    # removes duplicates.
+    #
+    # |
+    # means set union.
+    #
+    # Example:
+    #
+    # FAISS:
+    # {1, 2, 5, 8}
+    #
+    # BM25:
+    # {2, 4, 5, 9}
+    #
+    # Combined:
+    # {1, 2, 4, 5, 8, 9}
+    #
+    # Why:
+    # A chunk can be discovered by either retrieval method.
+
+
+    # ========================================================
+    # STEP 4: RECIPROCAL RANK FUSION
+    # ========================================================
+
+    rrf_scores = {}
+    # Dictionary to store the final hybrid/RRF score
+    # for every candidate chunk.
+
+
+    for idx in candidate_ids:
+        # Process every candidate returned by either
+        # FAISS or BM25.
+
+        score = 0.0
+        # Start the RRF score at zero.
+
+
+        if idx in semantic_rank:
+            # Check whether FAISS found this chunk.
+
+            score += 1.0 / (
+                RRF_K + semantic_rank[idx]
+            )
+            # Add the FAISS rank contribution.
+            #
+            # Formula:
+            #
+            # 1 / (K + rank)
+            #
+            # A rank of 1 gets a higher contribution
+            # than a rank of 10.
+
+
+        if idx in keyword_rank:
+            # Check whether BM25 found this chunk.
+
+            score += 1.0 / (
+                RRF_K + keyword_rank[idx]
+            )
+            # Add the BM25 rank contribution.
+            #
+            # If a chunk ranks highly in both FAISS and BM25,
+            # it receives a stronger combined score.
+
+
+        rrf_scores[idx] = score
+        # Save the final RRF score for this chunk.
+
+
+    # ========================================================
+    # STEP 5: SORT HYBRID RESULTS
+    # ========================================================
+
+    ranked_indices = sorted(
+        candidate_ids,
+        key=lambda idx: rrf_scores[idx],
+        reverse=True
+    )[:top_k]
+    # Sort chunks by their RRF score.
+    #
+    # reverse=True
+    # means highest score comes first.
+    #
+    # [:top_k]
+    # keeps only the desired number of final results.
+    #
+    # Example:
+    #
+    # top_k = 5
+    #
+    # Only the best 5 chunks are returned.
+
+
+    # ========================================================
+    # STEP 6: BUILD FINAL RESULT OBJECTS
+    # ========================================================
+
+    retrieved_results = []
+    # Empty list where final retrieved chunks will be stored.
+
+
+    for idx in ranked_indices:
+        # Loop through the final ranked chunk IDs.
+
+        chunk = chunks[idx]
+        # Get the original document chunk.
+        #
+        # Important:
+        # FAISS/BM25 gives us an index.
+        # chunks[idx] gives us the actual document data.
+
+
+        retrieved_results.append({
+            **chunk,
+            # Copy all fields from the original chunk.
+            #
+            # For example:
+            # chunk_id
+            # source
+            # content
+            # etc.
+
+
+            "chunk_id": chunk.get(
+                "chunk_id",
+                idx
+            ),
+            # Use the chunk's own chunk_id if it exists.
+            #
+            # If it doesn't exist, use its position in
+            # the chunks list.
+
+
+            "hybrid_score": float(
+                rrf_scores[idx]
+            ),
+            # Store the final RRF score.
+
+
+            "semantic_score": semantic_score_map.get(
+                idx
+            ),
+            # Store FAISS similarity score.
+            #
+            # .get(idx)
+            # returns None if FAISS didn't find this chunk.
+
+
+            "semantic_rank": semantic_rank.get(
+                idx
+            ),
+            # Store the FAISS rank.
+
+
+            "keyword_score": keyword_score_map.get(
+                idx
+            ),
+            # Store the BM25 score.
+
+
+            "keyword_rank": keyword_rank.get(
+                idx
+            )
+            # Store the BM25 rank.
+        })
+
+
+    return retrieved_results
+    # Return the final hybrid search results.
+
+
+# ============================================================
+# LLM ANSWER GENERATION
+# ============================================================
+
+def generate_answer(query, retrieved_results):
+    # Function that prepares the retrieved chunks for an LLM.
+    #
+    # The actual LLM API call will be added here.
+
+
+    context = "\n\n".join(
+        result["content"]
+        for result in retrieved_results
+    )
+    # Extract the content from every retrieved chunk.
+    #
+    # "\n\n".join(...)
+    # combines them with two newline characters.
+    #
+    # Why:
+    # The LLM needs the retrieved document text as context.
+
+
+    prompt = f"""
+You are a helpful insurance assistant.
+
+Answer the user's question using ONLY the information
+provided in the context below.
+
+Do not use outside knowledge.
+
+If the answer is not available in the context, say:
+
+"I could not find this information in the provided documents."
+
+Context:
+{context}
+
+Question:
+{query}
+
+Provide a clear and concise answer.
+"""
+    # Create the prompt that will be sent to the LLM.
+    #
+    # f"""..."""
+    # is an f-string, allowing Python variables such as
+    # {context} and {query} to be inserted.
+    #
+    # Why:
+    # We want the LLM to answer based only on retrieved
+    # documents.
+
+
+    print("\nPROMPT SENT TO LLM:")
+    print(prompt)
+    # Display the prompt for debugging.
+    #
+    # This is useful while developing the RAG system.
+
+
+    return "LLM integration is required to generate the final answer."
+    # Placeholder response.
+    #
+    # IMPORTANT:
+    # This is NOT an actual LLM call.
+    #
+    # You need to replace this with an API call to your
+    # selected LLM.
+
+
+# ============================================================
+# MAIN PROGRAM
+# ============================================================
+
+def main():
+    # Main function containing the application workflow.
+    #
+    # Why:
+    # Keeping the application inside main() makes the code
+    # cleaner and easier to reuse.
+
+
+    index, chunks = load_vector_store()
+    # Load the FAISS index and document chunks.
+
+
+    bm25 = build_bm25(chunks)
+    # Build the BM25 index from the same document chunks.
+    #
+    # Why:
+    # BM25 needs to be ready before we can search for queries.
+
+
+    while True:
+        # Start an infinite loop.
+        #
+        # Why:
+        # This allows the user to ask multiple questions without
+        # restarting the Python program.
+
+
+        query = input(
+            "\nAsk a question (or type 'exit' to quit): "
+        ).strip()
+        # Ask the user for a question.
+        #
+        # .strip()
+        # removes unnecessary spaces from the beginning/end.
+
+
+        if not query:
+            # Check if the user entered an empty question.
+
+            continue
+            # Go back to the beginning of the loop.
+
+
+        if query.lower() == "exit":
+            # Convert the input to lowercase and check
+            # whether the user wants to quit.
+            #
+            # This allows:
+            # exit
+            # EXIT
+            # Exit
+            # etc.
+
+
+            print("Retriever stopped.")
+            # Inform the user that the program is stopping.
+
+            break
+            # Exit the while loop.
+
+
+        # ====================================================
+        # RUN HYBRID RETRIEVAL
+        # ====================================================
+
+        results = retrieve(
+            query=query,
+            index=index,
+            chunks=chunks,
+            bm25=bm25,
+            top_k=5,
+            candidate_k=10
+        )
+        # Search using both FAISS and BM25.
+        #
+        # candidate_k=10:
+        # Get up to 10 candidates from each search system.
+        #
+        # top_k=5:
+        # Return the best 5 after RRF fusion.
+
+
+        # ====================================================
+        # DISPLAY RESULTS
+        # ====================================================
+
+        print("\nRETRIEVED RESULTS:")
+        # Print a heading.
+
+
+        for i, result in enumerate(results):
+            # Loop over every retrieved chunk.
+            #
+            # enumerate gives us:
+            # i = result number
+            # result = actual result dictionary
+
+
+            print("\n==============================")
+            print(f"RESULT {i + 1}")
+            print("==============================")
+            # Print a readable separator and result number.
+
+
+            print(
+                "Chunk ID:",
+                result["chunk_id"]
+            )
+            # Display the chunk ID.
+
+
+            print(
+                "Source:",
+                result.get("source", "Unknown")
+            )
+            # Display the document source.
+            #
+            # .get("source", "Unknown")
+            # prevents a KeyError if source doesn't exist.
+
+
+            print(
+                "Hybrid Score:",
+                result["hybrid_score"]
+            )
+            # Display the RRF/hybrid score.
+
+
+            print(
+                "Semantic Score:",
+                result["semantic_score"]
+            )
+            # Display the FAISS similarity score.
+
+
+            print(
+                "Semantic Rank:",
+                result["semantic_rank"]
+            )
+            # Display where this chunk ranked in FAISS.
+
+
+            print(
+                "Keyword Score:",
+                result["keyword_score"]
+            )
+            # Display BM25 score.
+
+
+            print(
+                "Keyword Rank:",
+                result["keyword_rank"]
+            )
+            # Display where this chunk ranked in BM25.
+
+
+            print("\nContent:")
+            print(result["content"])
+            # Display the actual document text.
+
+
+        # ====================================================
+        # GENERATE FINAL ANSWER
+        # ====================================================
+
+        answer = generate_answer(
+            query,
+            results
+        )
+        # Send the user query and retrieved context
+        # to the answer-generation function.
+
+
+        print("\nFINAL ANSWER:")
+        print(answer)
+        # Display the generated answer.
+
+
+# ============================================================
+# PYTHON ENTRY POINT
+# ============================================================
+
+if __name__ == "__main__":
+    # This condition checks whether this file is being
+    # executed directly.
+    #
+    # It will be True when you run:
+    #
+    # python retriever.py
+    #
+    # It will be False when another Python file imports
+    # this file.
+
+
+    main()
+    # Start the application.
+
