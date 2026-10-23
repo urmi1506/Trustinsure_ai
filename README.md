@@ -94,26 +94,6 @@ The chatbot retrieves relevant information from insurance documents before gener
 
 The assistant is designed to acknowledge when the provided documents do not contain enough information to answer a question.
 
-## 📁 Project Structure
-
-The structure below is illustrative. Update directory names to match the current repository before publishing.
-
-TrustInsure-AI/
-├── frontend/
-│   ├── src/
-│   ├── public/
-│   └── package.json
-├── backend/
-│   ├── src/
-│   │   ├── api/
-│   │   ├── rag/
-│   │   ├── data/
-│   │   └── artifacts/
-│   ├── requirements.txt
-│   └── .env.example
-├── .gitignore
-└── README.md
-
 ## 🚀 Getting Started
 
 ### Prerequisites
